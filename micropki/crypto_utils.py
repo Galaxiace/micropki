@@ -1,5 +1,6 @@
 import secrets
 from typing import Union
+from datetime import datetime, timezone
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa, ec
@@ -9,8 +10,10 @@ from cryptography.x509.oid import NameOID
 
 
 def generate_rsa_key(key_size: int = 4096) -> rsa.RSAPrivateKey:
-    if key_size != 4096:
-        raise ValueError(f"RSA key size must be 4096 bits, got {key_size}")
+    """Generate RSA private key"""
+    # Разрешаем 2048 для end-entity и 4096 для CA
+    if key_size not in [2048, 4096]:
+        raise ValueError(f"RSA key size must be 2048 or 4096 bits, got {key_size}")
 
     return rsa.generate_private_key(
         public_exponent=65537,
@@ -20,11 +23,17 @@ def generate_rsa_key(key_size: int = 4096) -> rsa.RSAPrivateKey:
 
 
 def generate_ecc_key(key_size: int = 384) -> ec.EllipticCurvePrivateKey:
-    if key_size != 384:
-        raise ValueError(f"ECC key size must be 384 bits, got {key_size}")
+    """Generate ECC private key"""
+    # Разрешаем 256 для end-entity и 384 для CA
+    if key_size == 256:
+        curve = ec.SECP256R1()
+    elif key_size == 384:
+        curve = ec.SECP384R1()
+    else:
+        raise ValueError(f"ECC key size must be 256 or 384 bits, got {key_size}")
 
     return ec.generate_private_key(
-        curve=ec.SECP384R1(),
+        curve=curve,
         backend=default_backend()
     )
 

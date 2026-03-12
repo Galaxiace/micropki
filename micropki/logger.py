@@ -31,6 +31,9 @@ class MicroPKILogger:
     def error(self, message: str):
         self.logger.error(message)
 
+    def debug(self, message: str):
+        self.logger.debug(message)
+
 
 def setup_logger(log_file: Optional[str] = None) -> MicroPKILogger:
     return MicroPKILogger(log_file=log_file)

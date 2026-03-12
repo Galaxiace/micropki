@@ -82,13 +82,16 @@ pip install -e .
 ```bash
 
 # Создание папки для секретов
-mkdir -p secrets
+mkdir -p secrets logs
 
-# Создание файла с паролем
-echo "mySecurePassword123" > secrets/pass.txt
+# Root CA пароль (один)
+echo "rootSecurePassword123" > secrets/pass.txt
+
+# Intermediate CA пароль (ДРУГОЙ, для безопасности)
+echo "intermediateSecurePassword456" > secrets/int.pass
 
 # Установка правильных прав доступа
-chmod 600 secrets/pass.txt
+chmod 600 secrets/*.pass
 ```
 
 ---
@@ -125,6 +128,74 @@ python -m micropki.cli ca init \
   --validity-days 3650
 ```
 
+### Создание промежуточного CA (Intermediate CA)
+
+```bash
+
+python -m micropki.cli ca issue-intermediate \
+  --root-cert ./pki/certs/ca.cert.pem \
+  --root-key ./pki/private/ca.key.pem \
+  --root-pass-file ./secrets/pass.txt \
+  --subject "/CN=My Intermediate CA/O=MicroPKI" \
+  --key-type rsa \
+  --key-size 4096 \
+  --passphrase-file ./secrets/int.pass \
+  --out-dir ./pki \
+  --validity-days 1825 \
+  --pathlen 0 \
+  --log-file ./logs/intermediate.log
+```
+
+### Выпуск серверного сертификата
+
+```bash
+
+python -m micropki.cli ca issue-cert \
+  --ca-cert ./pki/certs/intermediate.cert.pem \
+  --ca-key ./pki/private/intermediate.key.pem \
+  --ca-pass-file ./secrets/int.pass \
+  --template server \
+  --subject "/CN=example.com" \
+  --san dns:example.com \
+  --san dns:www.example.com \
+  --san ip:192.168.1.100 \
+  --out-dir ./pki/certs \
+  --validity-days 365 \
+  --log-file ./logs/server.log
+```
+
+### Выпуск клиентского сертификата
+
+```bash
+
+python -m micropki.cli ca issue-cert \
+  --ca-cert ./pki/certs/intermediate.cert.pem \
+  --ca-key ./pki/private/intermediate.key.pem \
+  --ca-pass-file ./secrets/int.pass \
+  --template client \
+  --subject "/CN=Alice Smith/emailAddress=alice@example.com" \
+  --san email:alice@example.com \
+  --san dns:client.example.com \
+  --out-dir ./pki/certs \
+  --validity-days 365 \
+  --log-file ./logs/client.log
+```
+
+### Выпуск code signing сертификата
+
+```bash
+
+python -m micropki.cli ca issue-cert \
+  --ca-cert ./pki/certs/intermediate.cert.pem \
+  --ca-key ./pki/private/intermediate.key.pem \
+  --ca-pass-file ./secrets/int.pass \
+  --template code_signing \
+  --subject "/CN=MicroPKI Code Signer" \
+  --out-dir ./pki/certs \
+  --validity-days 365 \
+  --log-file ./logs/codesign.log
+```
+
 ### Верификация сертификата
 
 ```bash
@@ -142,6 +213,16 @@ python -m micropki.cli ca verify \
   --log-file ./logs/verify.log
 ```
 
+### Проверка полной цепочки сертификатов
+
+```bash
+
+python -m micropki.cli ca verify-chain \
+  --leaf ./pki/certs/example.com.cert.pem \
+  --intermediate ./pki/certs/intermediate.cert.pem \
+  --root ./pki/certs/ca.cert.pem \
+  --log-file ./logs/chain-verify.log
+```
 ---
 
 ## Проверка через OpenSSL
@@ -161,7 +242,30 @@ openssl x509 -in pki/certs/ca.cert.pem -text -noout
 openssl verify -CAfile pki/certs/ca.cert.pem pki/certs/ca.cert.pem
 ```
 
-### Проверка расширений
+### Проверка промежуточного CA
+
+```bash
+
+openssl verify -CAfile ./pki/certs/ca.cert.pem ./pki/certs/intermediate.cert.pem
+```
+
+### Проверка полной цепочки
+
+```bash
+
+openssl verify -CAfile ./pki/certs/ca.cert.pem \
+  -untrusted ./pki/certs/intermediate.cert.pem \
+  ./pki/certs/example.com.cert.pem
+```
+
+### Проверка расширений серверного сертификата
+
+```bash
+
+openssl x509 -in ./pki/certs/example.com.cert.pem -text -noout | grep -A20 "X509v3 extensions"
+```
+
+### Проверка расширений корневого сертификата
 
 ```bash
 
@@ -169,25 +273,73 @@ openssl x509 -in pki/certs/ca.cert.pem -text -noout | grep -A1 "X509v3 Basic Con
 openssl x509 -in pki/certs/ca.cert.pem -text -noout | grep -A1 "X509v3 Key Usage"
 ```
 
+### Просмотр policy документа
+
+```bash
+
+cat pki/policy.txt
+```
+
+## Негативные тесты (проверка ошибок)
+
+### Попытка выпустить серверный сертификат без SAN (должна упасть)
+
+```bash
+
+python -m micropki.cli ca issue-cert \
+  --ca-cert ./pki/certs/intermediate.cert.pem \
+  --ca-key ./pki/private/intermediate.key.pem \
+  --ca-pass-file ./secrets/int.pass \
+  --template server \
+  --subject "/CN=test.com" \
+  --out-dir ./pki/certs \
+  --validity-days 365
+# Ожидается ошибка: "Template server requires at least one SAN"
+```
+
+### Попытка использовать неправильный пароль
+
+```bash
+
+python -m micropki.cli ca issue-cert \
+  --ca-cert ./pki/certs/intermediate.cert.pem \
+  --ca-key ./pki/private/intermediate.key.pem \
+  --ca-pass-file ./secrets/wrong.pass \
+  --template server \
+  --subject "/CN=example.com" \
+  --san dns:example.com \
+  --out-dir ./pki/certs \
+  --validity-days 365
+# Ожидается ошибка пароля
+```
+
 ---
 
 ## Структура проекта
 
 ```
-micropki/                           # Корневая папка проекта
+micropki/                            # Корневая папка проекта
 │
-├── micropki/                       # Основной пакет с кодом
-│   ├── __init__.py                 # Инициализация пакета, версия
-│   ├── cli.py                      # Интерфейс командной строки
-│   ├── ca.py                       # Логика создания корневого CA
-│   ├── crypto_utils.py             # Криптографические утилиты
-│   ├── logger.py                   # Настройка логирования
-│   └── verification.py             # Верификация сертификатов
+├── micropki/                        # Основной пакет с кодом
+│   ├── __init__.py                  # Инициализация пакета, версия
+│   ├── cli.py                       # Интерфейс командной строки
+│   ├── chain.py                     # Проверка цепочек сертификатов (leaf -> intermediate -> root)
+│   ├── csr.py                       # Генерация и подпись CSR для Intermediate CA и внешних запросов
+│   ├── templates.py                 # Шаблоны сертификатов (server/client/code_signing) с валидацией SAN и X.509 расширениями
+│   ├── ca.py                        # Логика создания корневого CA
+│   ├── crypto_utils.py              # Криптографические утилиты
+│   ├── logger.py                    # Настройка логирования
+│   └── verification.py              # Верификация сертификатов
 │
 ├── tests/                           # Директория для тестов
+│   ├── conftest.py
 │   ├── test_basic.py                # Базовые юнит-тесты
 │   ├── test_errors.py               # Тесты негативных сценариев
-│   └── test_key_cert_match.py       # Тесты соответствия ключей
+│   ├── test_key_cert_match.py       # Тесты соответствия ключей
+│   ├── test_sprint2_basic.py        # Юнит-тесты шаблонов, CSR, SAN парсинга
+│   ├── test_sprint2_integration.py  # Интеграционные тесты цепочек и OpenSSL совместимости
+│   ├── test_sprint2_negative.py     # Негативные тесты (ошибки валидации, пароли, CSR с CA=true)
+│   └── test_sprint2_roundtrip.py    # Round-trip тест TLS соединения с выпущенным сертификатом
 │
 ├── .gitignore                       # Игнорируемые файлы Git
 ├── requirements.txt                 # Зависимости проекта
@@ -253,11 +405,54 @@ make run-rsa
 make run-ecc
 ```
 
-### Проверить сертификат
+### Создание промежуточного CA
 
 ```bash
 
-make verify
+make issue-intermediate # Создать Intermediate CA (требует run-rsa)
+```
+
+### Выпуск сертификатов
+
+```bash
+
+make issue-server       # Выпустить серверный сертификат
+make issue-client       # Выпустить клиентский сертификат
+make issue-codesign     # Выпустить code signing сертификат
+```
+
+### Полный цикл Root CA -> Intermediate CA -> все сертификаты
+
+```bash
+
+make run-full
+```
+
+### Проверка сертификатов
+
+```bash
+
+make verify             # Проверить корневой сертификат
+make verify-int         # Проверить Intermediate CA через OpenSSL
+make verify-full        # Проверить полную цепочку через OpenSSL
+make verify-chain       # Проверить цепочку сертификатов
+```
+
+### Проверка структуры и прав доступа
+
+```bash
+
+make check-structure    # Показать структуру директорий
+make check-permissions  # Проверить права доступа к ключам
+make show-policy        # Показать policy.txt
+make show-logs          # Показать последние логи
+```
+
+### Негативные тесты
+
+```bash
+
+make negative-test-nosan  # Тест: серверный сертификат без SAN (должен упасть)
 ```
 
 ### Очистить временные файлы
